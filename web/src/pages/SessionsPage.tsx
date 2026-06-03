@@ -292,16 +292,20 @@ function SessionRow({
   const { t } = useI18n();
   const navigate = useNavigate();
 
+  const loadMessages = useCallback(() => {
+    setLoading(true);
+    api
+      .getSessionMessages(session.id)
+      .then((resp) => setMessages(resp.messages))
+      .catch((err) => setError(String(err)))
+      .finally(() => setLoading(false));
+  }, [session.id]);
+
   useEffect(() => {
     if (isExpanded && messages === null && !loading) {
-      setLoading(true);
-      api
-        .getSessionMessages(session.id)
-        .then((resp) => setMessages(resp.messages))
-        .catch((err) => setError(String(err)))
-        .finally(() => setLoading(false));
+      loadMessages();
     }
-  }, [isExpanded, session.id, messages, loading]);
+  }, [isExpanded, session.id, messages, loading, loadMessages]);
 
   const sourceInfo = (session.source
     ? SOURCE_CONFIG[session.source]
@@ -706,7 +710,7 @@ export default function SessionsPage() {
 
   const loadSessions = useCallback((p: number) => {
     setLoading(true);
-    api
+    return api
       .getSessions(PAGE_SIZE, p * PAGE_SIZE)
       .then((resp) => {
         setSessions(resp.sessions);
@@ -728,7 +732,7 @@ export default function SessionsPage() {
   }, [loadStats]);
 
   useEffect(() => {
-    loadSessions(page);
+    void loadSessions(page);
     refreshEmptyCount();
   }, [loadSessions, page, refreshEmptyCount]);
 
@@ -784,28 +788,29 @@ export default function SessionsPage() {
   );
 
   // Debounced FTS search
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
+  const doSearch = useCallback(() => {
     if (!search.trim()) {
       setSearchResults(null);
       setSearching(false);
       return;
     }
-
     setSearching(true);
-    debounceRef.current = setTimeout(() => {
-      api
-        .searchSessions(search.trim())
-        .then((resp) => setSearchResults(resp.results))
-        .catch(() => setSearchResults(null))
-        .finally(() => setSearching(false));
-    }, 300);
+    api
+      .searchSessions(search.trim())
+      .then((resp) => setSearchResults(resp.results))
+      .catch(() => setSearchResults(null))
+      .finally(() => setSearching(false));
+  }, [search]);
 
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      void doSearch();
+    }, search.trim() ? 300 : 0);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [search]);
+  }, [doSearch]);
 
   const sessionDelete = useConfirmDelete({
     onDelete: useCallback(
@@ -1078,10 +1083,6 @@ export default function SessionsPage() {
     platformEntries.length > 0 || recentSessions.length > 0;
   const showList = view === "list" || isSearching || !showOverviewTab;
   const showPagination = showList && !searchResults && total > PAGE_SIZE;
-
-  useEffect(() => {
-    if (isSearching) setView("list");
-  }, [isSearching]);
 
   const alerts: { message: string; detail?: string }[] = [];
   if (status) {

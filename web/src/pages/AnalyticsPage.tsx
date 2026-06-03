@@ -426,16 +426,25 @@ export default function AnalyticsPage() {
       .catch(() => setShowTokens(false));
   }, []);
 
-  const load = useCallback(() => {
-    if (!showTokens) return;
+  const doFetch = useCallback(() => {
+    if (!showTokens) return Promise.resolve<AnalyticsResponse | null>(null);
+    return api.getAnalytics(days);
+  }, [days, showTokens]);
+
+  const handleRefresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    api
-      .getAnalytics(days)
-      .then(setData)
+    doFetch()
+      .then((d) => { if (d) setData(d); })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
-  }, [days, showTokens]);
+  }, [doFetch]);
+
+  const handlePeriodChange = useCallback((newDays: number) => {
+    setLoading(true);
+    setError(null);
+    setDays(newDays);
+  }, []);
 
   useLayoutEffect(() => {
     // Period selector + refresh both live in afterTitle so the controls
@@ -451,7 +460,7 @@ export default function AnalyticsPage() {
               type="button"
               size="sm"
               outlined={days !== p.days}
-              onClick={() => setDays(p.days)}
+              onClick={() => handlePeriodChange(p.days)}
             >
               {p.label}
             </Button>
@@ -461,7 +470,7 @@ export default function AnalyticsPage() {
             ghost
             size="icon"
             className="text-muted-foreground hover:text-foreground"
-            onClick={load}
+            onClick={handleRefresh}
             disabled={loading}
             aria-label={t.common.refresh}
           >
@@ -475,11 +484,14 @@ export default function AnalyticsPage() {
       setAfterTitle(null);
       setEnd(null);
     };
-  }, [days, loading, load, setAfterTitle, setEnd, t.common.refresh, showTokens]);
+  }, [days, loading, handleRefresh, handlePeriodChange, setAfterTitle, setEnd, t.common.refresh, showTokens]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    doFetch()
+      .then((d) => { if (d) setData(d); })
+      .catch((err) => setError(String(err)))
+      .finally(() => setLoading(false));
+  }, [doFetch]);
 
   return (
     <div className="flex flex-col gap-6">

@@ -183,24 +183,24 @@ export default function ConfigPage() {
       .catch(() => {});
   }, []);
 
-  // Set active category when categories load
-  useEffect(() => {
-    if (categoryOrder.length > 0 && !activeCategory) {
-      setActiveCategory(categoryOrder[0]);
-    }
-  }, [categoryOrder, activeCategory]);
+  // Derive active category — default to first when none selected
+  const resolvedActiveCategory = activeCategory || (categoryOrder.length > 0 ? categoryOrder[0] : "");
 
   // Load YAML when switching to YAML mode
+  const loadYaml = useCallback(() => {
+    setYamlLoading(true);
+    api
+      .getConfigRaw()
+      .then((resp) => setYamlText(resp.yaml))
+      .catch(() => showToast(t.config.failedToLoadRaw, "error"))
+      .finally(() => setYamlLoading(false));
+  }, [showToast, t.config.failedToLoadRaw]);
+
   useEffect(() => {
     if (yamlMode) {
-      setYamlLoading(true);
-      api
-        .getConfigRaw()
-        .then((resp) => setYamlText(resp.yaml))
-        .catch(() => showToast(t.config.failedToLoadRaw, "error"))
-        .finally(() => setYamlLoading(false));
+      loadYaml();
     }
-  }, [yamlMode]);
+  }, [yamlMode, loadYaml]);
 
   /* ---- Categories ---- */
   const categories = useMemo(() => {
@@ -252,9 +252,9 @@ export default function ConfigPage() {
   const activeFields = useMemo(() => {
     if (!schema || isSearching) return [];
     return Object.entries(schema).filter(
-      ([, s]) => String(s.category ?? "general") === activeCategory,
+      ([, s]) => String(s.category ?? "general") === resolvedActiveCategory,
     );
-  }, [schema, activeCategory, isSearching]);
+  }, [schema, resolvedActiveCategory, isSearching]);
 
   /* ---- Handlers ---- */
   const handleSave = async () => {
@@ -306,7 +306,7 @@ export default function ConfigPage() {
     if (scopedFields.length === 0) return;
     const scopeLabel = isSearching
       ? t.config.searchResults
-      : prettyCategoryName(activeCategory);
+      : prettyCategoryName(resolvedActiveCategory);
     let next: Record<string, unknown> = config;
     for (const [key] of scopedFields) {
       next = setNestedValue(next, key, getNestedValue(defaults, key));
@@ -372,7 +372,7 @@ export default function ConfigPage() {
         !showCategory &&
         section &&
         section !== lastSection &&
-        section !== activeCategory;
+        section !== resolvedActiveCategory;
       lastSection = section;
       lastCat = cat;
 
@@ -453,7 +453,7 @@ export default function ConfigPage() {
             (() => {
               const resetScopeLabel = isSearching
                 ? t.config.searchResults
-                : prettyCategoryName(activeCategory);
+                : prettyCategoryName(resolvedActiveCategory);
               const resetTitle = t.config.resetScopeTooltip.replace(
                 "{scope}",
                 resetScopeLabel,
@@ -545,7 +545,7 @@ export default function ConfigPage() {
 
                 <div className="flex sm:flex-col gap-1 sm:gap-px p-2 sm:pt-1 overflow-x-auto sm:overflow-x-visible scrollbar-none sm:max-h-[calc(100vh-260px)] sm:overflow-y-auto">
                   {categories.map((cat) => {
-                    const isActive = !isSearching && activeCategory === cat;
+                    const isActive = !isSearching && resolvedActiveCategory === cat;
 
                     return (
                       <ListItem
@@ -616,10 +616,10 @@ export default function ConfigPage() {
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-sm flex items-center gap-2">
                       <CategoryIcon
-                        category={activeCategory}
+                        category={resolvedActiveCategory}
                         className="h-4 w-4"
                       />
-                      {prettyCategoryName(activeCategory)}
+                      {prettyCategoryName(resolvedActiveCategory)}
                     </CardTitle>
                     <Badge tone="secondary" className="text-xs">
                       {activeFields.length}{" "}
@@ -647,7 +647,7 @@ export default function ConfigPage() {
           "{scope}",
           isSearching
             ? t.config.searchResults
-            : prettyCategoryName(activeCategory),
+            : prettyCategoryName(resolvedActiveCategory),
         )}
         description={`This will reset ${
           (isSearching ? searchMatchedFields : activeFields).length
