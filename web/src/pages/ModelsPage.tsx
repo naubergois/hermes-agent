@@ -794,9 +794,7 @@ export default function ModelsPage() {
   }, []);
 
   const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    Promise.all([
+    return Promise.all([
       api.getModelsAnalytics(days),
       api.getAuxiliaryModels().catch(() => null),
     ])
@@ -807,6 +805,12 @@ export default function ModelsPage() {
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
   }, [days]);
+
+  const handleRefresh = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    void load();
+  }, [load]);
 
   const onAssigned = useCallback(() => {
     // Reload aux state after any assignment change.
@@ -830,7 +834,7 @@ export default function ModelsPage() {
           ghost
           size="icon"
           className="text-muted-foreground hover:text-foreground"
-          onClick={load}
+          onClick={handleRefresh}
           disabled={loading}
           aria-label={t.common.refresh}
         >
@@ -860,7 +864,7 @@ export default function ModelsPage() {
       setAfterTitle(null);
       setEnd(null);
     };
-  }, [days, loading, load, setAfterTitle, setEnd, t.common.refresh]);
+  }, [days, loading, handleRefresh, setAfterTitle, setEnd, t.common.refresh]);
 
   useEffect(() => {
     load();

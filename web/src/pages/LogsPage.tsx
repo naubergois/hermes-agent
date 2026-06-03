@@ -62,17 +62,20 @@ export default function LogsPage() {
   const [lineCount, setLineCount] = useState<(typeof LINE_COUNTS)[number]>(100);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [lines, setLines] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { t } = useI18n();
   const { setAfterTitle, setEnd } = usePageHeader();
 
-  const fetchLogs = useCallback(() => {
+  const doFetch = useCallback(() => {
+    return api.getLogs({ file, lines: lineCount, level, component });
+  }, [file, lineCount, level, component]);
+
+  const handleRefresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    api
-      .getLogs({ file, lines: lineCount, level, component })
+    doFetch()
       .then((resp) => {
         setLines(resp.lines);
         setTimeout(() => {
@@ -83,7 +86,7 @@ export default function LogsPage() {
       })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
-  }, [file, lineCount, level, component]);
+  }, [doFetch]);
 
   useLayoutEffect(() => {
     setAfterTitle(
@@ -97,7 +100,7 @@ export default function LogsPage() {
           ghost
           size="icon"
           className="text-muted-foreground hover:text-foreground"
-          onClick={fetchLogs}
+          onClick={handleRefresh}
           disabled={loading}
           aria-label={t.common.refresh}
         >
@@ -140,18 +143,40 @@ export default function LogsPage() {
     t.common.live,
     t.common.refresh,
     t.logs.autoRefresh,
-    fetchLogs,
+    handleRefresh,
   ]);
 
   useEffect(() => {
-    fetchLogs();
-  }, [fetchLogs]);
+    doFetch()
+      .then((resp) => {
+        setLines(resp.lines);
+        setTimeout(() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        }, 50);
+      })
+      .catch((err) => setError(String(err)))
+      .finally(() => setLoading(false));
+  }, [doFetch]);
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(fetchLogs, 5000);
+    const interval = setInterval(() => {
+      doFetch()
+        .then((resp) => {
+          setLines(resp.lines);
+          setTimeout(() => {
+            if (scrollRef.current) {
+              scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            }
+          }, 50);
+        })
+        .catch((err) => setError(String(err)))
+        .finally(() => setLoading(false));
+    }, 5000);
     return () => clearInterval(interval);
-  }, [autoRefresh, fetchLogs]);
+  }, [autoRefresh, doFetch]);
 
   return (
     <div className="flex min-w-0 max-w-full flex-col gap-4">

@@ -278,16 +278,20 @@ function SessionRow({
   const { t } = useI18n();
   const navigate = useNavigate();
 
+  const loadMessages = useCallback(() => {
+    setLoading(true);
+    api
+      .getSessionMessages(session.id)
+      .then((resp) => setMessages(resp.messages))
+      .catch((err) => setError(String(err)))
+      .finally(() => setLoading(false));
+  }, [session.id]);
+
   useEffect(() => {
     if (isExpanded && messages === null && !loading) {
-      setLoading(true);
-      api
-        .getSessionMessages(session.id)
-        .then((resp) => setMessages(resp.messages))
-        .catch((err) => setError(String(err)))
-        .finally(() => setLoading(false));
+      loadMessages();
     }
-  }, [isExpanded, session.id, messages, loading]);
+  }, [isExpanded, session.id, messages, loading, loadMessages]);
 
   const sourceInfo = (session.source
     ? SOURCE_CONFIG[session.source]
@@ -513,21 +517,24 @@ export default function SessionsPage() {
     };
   }, [loading, setAfterTitle, total]);
 
-  const loadSessions = useCallback((p: number) => {
+  const doFetchSessions = useCallback((p: number) => {
+    return api.getSessions(PAGE_SIZE, p * PAGE_SIZE);
+  }, []);
+
+  const handlePageChange = useCallback((newPage: number) => {
     setLoading(true);
-    api
-      .getSessions(PAGE_SIZE, p * PAGE_SIZE)
+    setPage(newPage);
+  }, []);
+
+  useEffect(() => {
+    doFetchSessions(page)
       .then((resp) => {
         setSessions(resp.sessions);
         setTotal(resp.total);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    loadSessions(page);
-  }, [loadSessions, page]);
+  }, [doFetchSessions, page]);
 
   useEffect(() => {
     const loadOverview = () => {
@@ -551,28 +558,29 @@ export default function SessionsPage() {
   }, [actionStatus?.lines]);
 
   // Debounced FTS search
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
+  const doSearch = useCallback(() => {
     if (!search.trim()) {
       setSearchResults(null);
       setSearching(false);
       return;
     }
-
     setSearching(true);
-    debounceRef.current = setTimeout(() => {
-      api
-        .searchSessions(search.trim())
-        .then((resp) => setSearchResults(resp.results))
-        .catch(() => setSearchResults(null))
-        .finally(() => setSearching(false));
-    }, 300);
+    api
+      .searchSessions(search.trim())
+      .then((resp) => setSearchResults(resp.results))
+      .catch(() => setSearchResults(null))
+      .finally(() => setSearching(false));
+  }, [search]);
 
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      void doSearch();
+    }, search.trim() ? 300 : 0);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [search]);
+  }, [doSearch]);
 
   const sessionDelete = useConfirmDelete({
     onDelete: useCallback(
@@ -627,10 +635,6 @@ export default function SessionsPage() {
     platformEntries.length > 0 || recentSessions.length > 0;
   const showList = view === "list" || isSearching || !showOverviewTab;
   const showPagination = showList && !searchResults && total > PAGE_SIZE;
-
-  useEffect(() => {
-    if (isSearching) setView("list");
-  }, [isSearching]);
 
   const alerts: { message: string; detail?: string }[] = [];
   if (status) {
@@ -817,7 +821,7 @@ export default function SessionsPage() {
               className="shrink-0 sm:ml-auto"
               page={page}
               total={total}
-              onPageChange={setPage}
+              onPageChange={handlePageChange}
             />
           )}
         </div>
@@ -859,7 +863,7 @@ export default function SessionsPage() {
               <SessionsPagination
                 page={page}
                 total={total}
-                onPageChange={setPage}
+                onPageChange={handlePageChange}
               />
             )}
           </>

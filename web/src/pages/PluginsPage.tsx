@@ -42,6 +42,7 @@ export default function PluginsPage() {
   const { setAfterTitle } = usePageHeader();
 
   const loadHub = useCallback(() => {
+    setLoading(true);
     return api
       .getPluginsHub()
       .then((h) => {
@@ -50,12 +51,12 @@ export default function PluginsPage() {
         setMemorySel(p.memory_provider ? p.memory_provider : MEMORY_PROVIDER_BUILTIN);
         setContextSel(p.context_engine || "compressor");
       })
-      .catch(() => showToast(t.common.loading, "error"));
+      .catch(() => showToast(t.common.loading, "error"))
+      .finally(() => setLoading(false));
   }, [showToast, t.common.loading]);
 
   useEffect(() => {
-    setLoading(true);
-    void loadHub().finally(() => setLoading(false));
+    void loadHub();
   }, [loadHub]);
 
   useEffect(() => {
