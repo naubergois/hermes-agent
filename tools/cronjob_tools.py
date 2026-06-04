@@ -16,6 +16,8 @@ from hermes_constants import display_hermes_home
 
 logger = logging.getLogger(__name__)
 
+_JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$", re.IGNORECASE)
+
 # Import from cron module (will be available when properly installed)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -589,6 +591,18 @@ def cronjob(
                 indent=2,
             )
         if not job:
+            if normalized == "remove" and _JOB_ID_RE.fullmatch(str(job_id or "")):
+                # Remove is idempotent for canonical IDs: if the job is already
+                # gone (stale UI/list race), report success instead of a hard error.
+                return json.dumps(
+                    {
+                        "success": True,
+                        "already_absent": True,
+                        "message": f"Cron job '{job_id}' is already absent.",
+                        "removed_job": {"id": job_id, "name": None},
+                    },
+                    indent=2,
+                )
             return json.dumps(
                 {"success": False, "error": f"Job with ID or name '{job_id}' not found. Use cronjob(action='list') to inspect jobs."},
                 indent=2,

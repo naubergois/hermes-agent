@@ -452,3 +452,16 @@ class TestUnifiedCronjobTool:
         assert updated["success"] is True
         stored = get_job(created["job_id"])
         assert stored["deliver"] == "telegram"
+
+    def test_remove_missing_id_is_idempotent_success(self):
+        result = json.loads(cronjob(action="remove", job_id="34108b055a5c"))
+
+        assert result["success"] is True
+        assert result["already_absent"] is True
+        assert result["removed_job"]["id"] == "34108b055a5c"
+
+    def test_remove_missing_name_still_errors(self):
+        result = json.loads(cronjob(action="remove", job_id="job-que-nao-existe"))
+
+        assert result["success"] is False
+        assert "not found" in result["error"].lower()
