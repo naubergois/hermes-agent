@@ -369,15 +369,14 @@ export function useMainApp(gw: GatewayClient) {
 
   const syncHeightCache = useCallback(
     (heights: ReadonlyMap<string, number>) => {
-      for (const row of virtualRows) {
-        const h = heights.get(row.key)
-
-        if (h) {
-          heightCache.set(row.key, h)
-        }
+      // ⚡ PERF FIX: Don't iterate virtualRows in dependency.
+      // Just sync the heights that were calculated; virtualRows change
+      // constantly and invalidate this callback on every render.
+      for (const [key, h] of heights) {
+        heightCache.set(key, h)
       }
     },
-    [heightCache, virtualRows]
+    [heightCache]  // Only depends on heightCache, not virtualRows
   )
 
   const virtualHistory = useVirtualHistory(scrollRef, virtualRows, cols, {

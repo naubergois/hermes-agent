@@ -1825,6 +1825,12 @@ The user has requested that this compaction PRIORITISE preserving all informatio
         self._last_aux_model_failure_error = None
         self._last_aux_model_failure_model = None
         self._last_compress_aborted = False
+        
+        # ⚡ PERF FIX: Focused compression bypasses anti-thrashing check
+        # When user provides a specific topic, reset the ineffective counter
+        # so focused compression attempts are not blocked by prior blanket attempts.
+        if focus_topic:
+            self._ineffective_compression_count = 0
 
         # Manual /compress (force=True) bypasses the failure cooldown so the
         # user can retry immediately after an auto-compress abort.  Without
