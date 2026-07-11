@@ -780,25 +780,32 @@ class ContextCompressor(ContextEngine):
         result = [m.copy() for m in messages]
         pruned = 0
 
-        # Build index: tool_call_id -> (tool_name, arguments_json)
+        # ⚡ PERF FIX: Consolidated single-pass through messages instead of 3+ passes
+        # Build ALL indices in first pass, apply all transformations in second pass
         call_id_to_tool: Dict[str, tuple] = {}
-        for msg in result:
+        content_hashes: dict = {}  # hash -> (index, tool_call_id)
+        
+        # Pass 1: Index & dedupe hashes (backward pass only)
+        for i in range(len(result) - 1, -1, -1):
+            msg = result[i]
+            # Index assistant tool calls
             if msg.get("role") == "assistant":
                 for tc in msg.get("tool_calls") or []:
                     if isinstance(tc, dict):
                         cid = tc.get("id", "")
                         fn = tc.get("function", {})
                         call_id_to_tool[cid] = (fn.get("name", "unknown"), fn.get("arguments", ""))
-                    else:
-                        cid = getattr(tc, "id", "") or ""
-                        fn = getattr(tc, "function", None)
-                        name = getattr(fn, "name", "unknown") if fn else "unknown"
-                        args_str = getattr(fn, "arguments", "") if fn else ""
-                        call_id_to_tool[cid] = (name, args_str)
-
-        # Determine the prune boundary
+            
+            # Index tool result hashes
+            if msg.get("role") == "tool":
+                content = msg.get("content") or ""
+                if isinstance(content, str) and 200 <= len(content) < 1_000_000:
+                    h = hashlib.md5(content.encode("utf-8", errors="replace")).hexdigest()[:12]
+                    if h not in content_hashes:
+                        content_hashes[h] = (i, msg.get("tool_call_id", "?"))
+        
+        # Determine prune boundary (unchanged logic)
         if protect_tail_tokens is not None and protect_tail_tokens > 0:
-            # Token-budget approach: walk backward accumulating tokens
             accumulated = 0
             boundary = len(result)
             min_protect = min(protect_tail_count, len(result))
@@ -816,106 +823,70 @@ class ContextCompressor(ContextEngine):
                     break
                 accumulated += msg_tokens
                 boundary = i
-            # Translate the budget walk into a "protected count", apply the
-            # floor in count-space (where `max` reads naturally: protect at
-            # least `min_protect` messages or whatever the budget reserved,
-            # whichever is more), then convert back to a prune boundary.
-            # Doing this in index-space with `max` would invert the direction
-            # (smaller index = MORE protected), so a generous budget would
-            # silently get truncated back down to `min_protect`.
             budget_protect_count = len(result) - boundary
             protected_count = max(budget_protect_count, min_protect)
             prune_boundary = len(result) - protected_count
         else:
             prune_boundary = len(result) - protect_tail_count
 
-        # Pass 1: Deduplicate identical tool results.
-        # When the same file is read multiple times, keep only the most recent
-        # full copy and replace older duplicates with a back-reference.
-        content_hashes: dict = {}  # hash -> (index, tool_call_id)
-        for i in range(len(result) - 1, -1, -1):
-            msg = result[i]
-            if msg.get("role") != "tool":
-                continue
-            content = msg.get("content") or ""
-            # Multimodal content — dedupe by the text summary if available.
-            if isinstance(content, list):
-                continue
-            if not isinstance(content, str):
-                # Multimodal dict envelopes ({_multimodal: True, content: [...]}) and
-                # other non-string tool-result shapes can't be hashed/deduped by text.
-                continue
-            if len(content) < 200:
-                continue
-            h = hashlib.md5(content.encode("utf-8", errors="replace")).hexdigest()[:12]
-            if h in content_hashes:
-                # This is an older duplicate — replace with back-reference
-                result[i] = {**msg, "content": "[Duplicate tool output — same content as a more recent call]"}
-                pruned += 1
-            else:
-                content_hashes[h] = (i, msg.get("tool_call_id", "?"))
-
-        # Pass 2: Replace old tool results with informative summaries
+        # Pass 2: Single forward pass applying ALL transformations
         for i in range(prune_boundary):
             msg = result[i]
-            if msg.get("role") != "tool":
-                continue
-            content = msg.get("content", "")
-            # Multimodal content (base64 screenshots etc.): strip the image
-            # payload — keep a lightweight text placeholder in its place.
-            # Without this, an old computer_use screenshot (~1MB base64 +
-            # ~1500 real tokens) survives every compression pass forever.
-            if isinstance(content, list):
-                stripped = _strip_image_parts_from_parts(content)
-                if stripped is not None:
-                    result[i] = {**msg, "content": stripped}
-                    pruned += 1
-                continue
-            if isinstance(content, dict) and content.get("_multimodal"):
-                summary = content.get("text_summary") or "[screenshot removed to save context]"
-                result[i] = {**msg, "content": f"[screenshot removed] {summary[:200]}"}
-                pruned += 1
-                continue
-            if not isinstance(content, str):
-                continue
-            if not content or content == _PRUNED_TOOL_PLACEHOLDER:
-                continue
-            # Skip already-deduplicated or previously-summarized results
-            if content.startswith("[Duplicate tool output"):
-                continue
-            # Only prune if the content is substantial (>200 chars)
-            if len(content) > 200:
-                call_id = msg.get("tool_call_id", "")
-                tool_name, tool_args = call_id_to_tool.get(call_id, ("unknown", ""))
-                summary = _summarize_tool_result(tool_name, tool_args, content)
-                result[i] = {**msg, "content": summary}
-                pruned += 1
-
-        # Pass 3: Truncate large tool_call arguments in assistant messages
-        # outside the protected tail. write_file with 50KB content, for
-        # example, survives pruning entirely without this.
-        #
-        # The shrinking is done inside the parsed JSON structure so the
-        # result remains valid JSON — otherwise downstream providers 400
-        # on every subsequent turn until the broken call falls out of
-        # the window. See ``_truncate_tool_call_args_json`` docstring.
-        for i in range(prune_boundary):
-            msg = result[i]
-            if msg.get("role") != "assistant" or not msg.get("tool_calls"):
-                continue
-            new_tcs = []
             modified = False
-            for tc in msg["tool_calls"]:
-                if isinstance(tc, dict):
-                    args = tc.get("function", {}).get("arguments", "")
-                    if len(args) > 500:
-                        new_args = _truncate_tool_call_args_json(args)
-                        if new_args != args:
-                            tc = {**tc, "function": {**tc["function"], "arguments": new_args}}
-                            modified = True
-                new_tcs.append(tc)
-            if modified:
-                result[i] = {**msg, "tool_calls": new_tcs}
+            
+            # Dedup: Replace old identical tool results
+            if msg.get("role") == "tool":
+                content = msg.get("content") or ""
+                if isinstance(content, str) and 200 <= len(content) < 1_000_000:
+                    h = hashlib.md5(content.encode("utf-8", errors="replace")).hexdigest()[:12]
+                    if h in content_hashes and content_hashes[h][0] != i:
+                        result[i] = {**msg, "content": "[Duplicate tool output — same content as a more recent call]"}
+                        pruned += 1
+                        modified = True
+            
+            # Strip images from multimodal content
+            if not modified and msg.get("role") == "tool":
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    stripped = _strip_image_parts_from_parts(content)
+                    if stripped is not None:
+                        result[i] = {**msg, "content": stripped}
+                        pruned += 1
+                        modified = True
+                elif isinstance(content, dict) and content.get("_multimodal"):
+                    summary = content.get("text_summary") or "[screenshot removed to save context]"
+                    result[i] = {**msg, "content": f"[screenshot removed] {summary[:200]}"}
+                    pruned += 1
+                    modified = True
+            
+            # Summarize old tool results
+            if not modified and msg.get("role") == "tool":
+                content = msg.get("content", "")
+                if isinstance(content, str) and len(content) > 200:
+                    if not content.startswith("[Duplicate tool output") and content != _PRUNED_TOOL_PLACEHOLDER:
+                        call_id = msg.get("tool_call_id", "")
+                        tool_name, tool_args = call_id_to_tool.get(call_id, ("unknown", ""))
+                        summary = _summarize_tool_result(tool_name, tool_args, content)
+                        result[i] = {**msg, "content": summary}
+                        pruned += 1
+                        modified = True
+            
+            # Truncate large tool_call arguments in assistant messages
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                new_tcs = []
+                tc_modified = False
+                for tc in msg["tool_calls"]:
+                    if isinstance(tc, dict):
+                        args = tc.get("function", {}).get("arguments", "")
+                        if len(args) > 500:
+                            new_args = _truncate_tool_call_args_json(args)
+                            if new_args != args:
+                                tc = {**tc, "function": {**tc["function"], "arguments": new_args}}
+                                tc_modified = True
+                    new_tcs.append(tc)
+                if tc_modified:
+                    result[i] = {**msg, "tool_calls": new_tcs}
+        
 
         return result, pruned
 

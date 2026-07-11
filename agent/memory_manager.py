@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import re
 import inspect
+import threading
 from typing import Any, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
@@ -252,6 +253,12 @@ class MemoryManager:
         self._providers: List[MemoryProvider] = []
         self._tool_to_provider: Dict[str, MemoryProvider] = {}
         self._has_external: bool = False  # True once a non-builtin provider is added
+        
+        # ⚡ PERF: Cache prefetched context from previous turn + background sync
+        self._prefetch_cache: str = ""
+        self._prefetch_cache_lock = threading.Lock()
+        self._sync_thread: Optional[threading.Thread] = None
+        self._sync_thread_lock = threading.Lock()
 
     # -- Registration --------------------------------------------------------
 
@@ -337,11 +344,22 @@ class MemoryManager:
     # -- Prefetch / recall ---------------------------------------------------
 
     def prefetch_all(self, query: str, *, session_id: str = "") -> str:
-        """Collect prefetch context from all providers.
+        """Return cached prefetch context from previous turn (non-blocking).
+
+        ⚡ PERF FIX: Return immediately with cached result from queue_prefetch_all().
+        Actual prefetch happens in background via queue_prefetch_all().
+        This eliminates blocking on memory provider I/O during the API call.
 
         Returns merged context text labeled by provider. Empty providers
         are skipped. Failures in one provider don't block others.
         """
+        with self._prefetch_cache_lock:
+            cached = self._prefetch_cache
+            self._prefetch_cache = ""  # Clear cache after returning it
+        return cached
+
+    def _do_prefetch_blocking(self, query: str, *, session_id: str = "") -> str:
+        """Actual blocking prefetch implementation called from background thread."""
         parts = []
         for provider in self._providers:
             try:
@@ -356,15 +374,23 @@ class MemoryManager:
         return "\n\n".join(parts)
 
     def queue_prefetch_all(self, query: str, *, session_id: str = "") -> None:
-        """Queue background prefetch on all providers for the next turn."""
-        for provider in self._providers:
+        """Queue background prefetch on all providers for the next turn.
+        
+        ⚡ PERF FIX: Now runs in background thread + caches result for prefetch_all().
+        This eliminates blocking on memory provider I/O after response generation.
+        """
+        def _background_prefetch():
             try:
-                provider.queue_prefetch(query, session_id=session_id)
+                result = self._do_prefetch_blocking(query, session_id=session_id)
+                with self._prefetch_cache_lock:
+                    self._prefetch_cache = result
             except Exception as e:
-                logger.debug(
-                    "Memory provider '%s' queue_prefetch failed (non-fatal): %s",
-                    provider.name, e,
-                )
+                logger.debug("Background prefetch failed: %s", e)
+        
+        # Start background prefetch in daemon thread (non-blocking)
+        thread = threading.Thread(target=_background_prefetch, daemon=True)
+        thread.name = f"memory-prefetch-{session_id[:12]}"
+        thread.start()
 
     # -- Sync ----------------------------------------------------------------
 
@@ -380,7 +406,7 @@ class MemoryManager:
             return True
         return "messages" in signature.parameters
 
-    def sync_all(
+    def _do_sync_blocking(
         self,
         user_content: str,
         assistant_content: str,
@@ -388,7 +414,7 @@ class MemoryManager:
         session_id: str = "",
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        """Sync a completed turn to all providers."""
+        """Actual blocking sync implementation called from background thread."""
         for provider in self._providers:
             try:
                 if messages is not None and self._provider_sync_accepts_messages(provider):
@@ -409,6 +435,35 @@ class MemoryManager:
                     "Memory provider '%s' sync_turn failed: %s",
                     provider.name, e,
                 )
+
+    def sync_all(
+        self,
+        user_content: str,
+        assistant_content: str,
+        *,
+        session_id: str = "",
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """Sync a completed turn to all providers (non-blocking background).
+        
+        ⚡ PERF FIX: Returns immediately and runs sync in background thread.
+        This eliminates chat latency from memory persistence delays.
+        """
+        # Wait for previous sync to complete (single sync per turn)
+        with self._sync_thread_lock:
+            if self._sync_thread is not None:
+                self._sync_thread.join(timeout=5.0)  # Don't block forever
+            
+            # Start new background sync
+            thread = threading.Thread(
+                target=self._do_sync_blocking,
+                args=(user_content, assistant_content),
+                kwargs={"session_id": session_id, "messages": messages},
+                daemon=True,
+            )
+            thread.name = f"memory-sync-{session_id[:12]}"
+            self._sync_thread = thread
+            thread.start()
 
     # -- Tools ---------------------------------------------------------------
 

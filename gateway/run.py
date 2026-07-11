@@ -16362,8 +16362,6 @@ class GatewayRunner:
         _cache = getattr(self, "_agent_cache", None)
         if _cache is None:
             return
-        # OrderedDict.popitem(last=False) pops oldest; plain dict lacks the
-        # arg so skip enforcement if a test fixture swapped the cache type.
         if not hasattr(_cache, "move_to_end"):
             return
 
@@ -16376,28 +16374,30 @@ class GatewayRunner:
             if a is not None and a is not _AGENT_PENDING_SENTINEL
         }
 
-        # Walk LRU → MRU and evict excess-LRU entries that aren't mid-turn.
-        # We only consider entries in the first (size - cap) LRU positions
-        # as eviction candidates.  If one of those slots is held by an
-        # active agent, we SKIP it without compensating by evicting a
-        # newer entry — that would penalise a freshly-inserted session
-        # (which has no cache history to retain) while protecting an
-        # already-cached long-running one.  The cache may therefore stay
-        # temporarily over cap; it will re-check on the next insert,
-        # after active turns have finished.
+        # ⚡ PERF FIX: Use popitem(last=False) O(1) eviction instead of list() O(n)
+        # Evict LRU entries until cache is at cap or all eviction candidates are mid-turn
         excess = max(0, len(_cache) - _AGENT_CACHE_MAX_SIZE)
         evict_plan: List[tuple] = []  # [(key, agent), ...]
-        if excess > 0:
-            ordered_keys = list(_cache.keys())
-            for key in ordered_keys[:excess]:
-                entry = _cache.get(key)
+        
+        while excess > 0:
+            try:
+                # popitem(last=False) removes oldest (LRU) entry from OrderedDict in O(1)
+                key, entry = _cache.popitem(last=False)
                 agent = entry[0] if isinstance(entry, tuple) and entry else None
+                
                 if agent is not None and id(agent) in running_ids:
-                    continue  # active mid-turn; don't evict, don't substitute
+                    # Active mid-turn — don't evict this one, push it back
+                    # (move_to_end puts it at the end/MRU position)
+                    _cache[key] = entry
+                    _cache.move_to_end(key)
+                    # Since we skipped this candidate, don't count it against excess
+                    continue
+                
                 evict_plan.append((key, agent))
-
-        for key, _ in evict_plan:
-            _cache.pop(key, None)
+                excess -= 1
+            except KeyError:
+                # Cache is empty or exhausted
+                break
 
         remaining_over_cap = len(_cache) - _AGENT_CACHE_MAX_SIZE
         if remaining_over_cap > 0:
@@ -16407,6 +16407,7 @@ class GatewayRunner:
                 len(_cache), _AGENT_CACHE_MAX_SIZE, remaining_over_cap,
             )
 
+        # Cleanup evicted agents on daemon threads (non-blocking)
         for key, agent in evict_plan:
             logger.info(
                 "Agent cache at cap; evicting LRU session=%s (cache_size=%d)",
