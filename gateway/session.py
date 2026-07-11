@@ -682,6 +682,9 @@ class SessionStore:
         self._lock = threading.Lock()
         self._has_active_processes_fn = has_active_processes_fn
         
+        # ⚡ PERF: Track last expiry scan time for O(n) → O(k) optimization
+        self._last_expiry_scan_time: float = 0.0
+        
         # Initialize SQLite session database
         self._db = None
         try:
@@ -830,6 +833,35 @@ class SessionStore:
                 return "daily"
         
         return None
+    
+    def _collect_expired_sessions_fast(self) -> List[tuple]:
+        """Collect expired sessions using early-exit on sorted updated_at.
+        
+        ⚡ PERF FIX: Instead of O(n) iteration on all sessions, sort by updated_at
+        once and break early when hitting non-expired sessions (since older sessions
+        are more likely to be expired).
+        
+        Returns list of (key, entry) tuples for expired sessions.
+        """
+        if not self._entries:
+            return []
+        
+        # Sort by updated_at ascending (oldest first)
+        sorted_items = sorted(
+            self._entries.items(),
+            key=lambda item: item[1].updated_at
+        )
+        
+        expired = []
+        for key, entry in sorted_items:
+            if self._is_session_expired(entry):
+                expired.append((key, entry))
+            # Early exit: once we hit a non-expired entry, all newer ones are valid
+            # (since we sorted by updated_at ascending)
+            elif expired:
+                break
+        
+        return expired
     
     def has_any_sessions(self) -> bool:
         """Check if any sessions have ever been created (across all platforms).

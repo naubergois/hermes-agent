@@ -324,6 +324,16 @@ CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(ex
 DEFERRED_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_messages_session_active
     ON messages(session_id, active, timestamp);
+
+-- ⚡ PERF FIX: Add missing indices for common queries
+CREATE INDEX IF NOT EXISTS idx_sessions_title
+    ON sessions(title);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id
+    ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_compression_locks_session
+    ON compression_locks(session_id);
+CREATE INDEX IF NOT EXISTS idx_messages_role_session
+    ON messages(role, session_id, timestamp);
 """
 
 FTS_SQL = """

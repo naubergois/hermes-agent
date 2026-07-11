@@ -39,6 +39,7 @@ import threading
 import time
 import sqlite3
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from pathlib import Path
 from datetime import datetime
@@ -1957,7 +1958,9 @@ class GatewayRunner:
         # Persistent Honcho managers keyed by gateway session key.
         # This preserves write_frequency="session" semantics across short-lived
         # per-message AIAgent instances.
-
+        
+        # ⚡ PERF: ThreadPoolExecutor for non-blocking cleanup operations
+        self._cleanup_executor = ThreadPoolExecutor(max_workers=4)
 
 
         # Ensure tirith security scanner is available (downloads if needed)
