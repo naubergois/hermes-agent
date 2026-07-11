@@ -246,6 +246,16 @@ TOOLSETS = {
         "includes": []
     },
 
+    "ide": {
+        "description": "IDE development tools: code understanding (LSP), workspace discovery, build integration, test execution, and error parsing",
+        "tools": [
+            "analyze_workspace", "find_definition", "find_references", 
+            "search_symbols", "build_project", "run_tests", "discover_tests",
+            "parse_errors", "get_build_info", "lint_code", "format_code"
+        ],
+        "includes": []
+    },
+
     # "honcho" toolset removed — Honcho is now a memory provider plugin.
     # Tools are injected via MemoryManager, not the toolset system.
 

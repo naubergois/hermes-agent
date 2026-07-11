@@ -1,0 +1,7 @@
+name: google
+version: 1.0.0
+description: "Google Gemini video generation backend (Veo 3.1, Veo 2). Supports text-to-video, image-to-video, and video editing via Google's Generative AI API."
+author: NousResearch
+kind: backend
+requires_env:
+  - GOOGLE_API_KEY
