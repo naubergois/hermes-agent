@@ -247,7 +247,7 @@ TOOLSETS = {
     },
 
     "ide": {
-        "description": "IDE development tools: code understanding (LSP), workspace discovery, build integration, test execution, error parsing, results visualization, and code quality checking",
+        "description": "IDE development tools: code understanding (LSP), workspace discovery, build integration, test execution, error parsing, results visualization, code quality checking, code generation, test generation, code review, and CI/CD automation",
         "tools": [
             # Phase 1 - Core IDE Tools
             "analyze_workspace", "find_definition", "find_references", 
@@ -255,7 +255,10 @@ TOOLSETS = {
             "parse_errors", "get_build_info", "lint_code", "format_code",
             # Phase 2 - Results Visualization & Code Quality
             "visualize_diff", "generate_test_report", "create_build_dashboard",
-            "check_code_quality", "check_types"
+            "check_code_quality", "check_types",
+            # Phase 3 - Code Generation, Testing, Review, and CI/CD
+            "generate_component", "generate_tests", "generate_mocks",
+            "review_code", "create_pr", "run_ci_workflow"
         ],
         "includes": []
     },
