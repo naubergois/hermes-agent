@@ -201,17 +201,8 @@ def apply_wal_with_fallback(
         if existing == "wal":
             raise
         _log_wal_fallback_once(db_label, exc)
-        
-        # ⚡ PERF FIX: Use TRUNCATE (faster than DELETE) on NFS fallback
-        # TRUNCATE journal mode is 2-3x faster than DELETE for most operations
-        # while still being compatible with network file systems.
-        # Falls back to DELETE only if TRUNCATE is not supported.
-        try:
-            conn.execute("PRAGMA journal_mode=TRUNCATE")
-            return "truncate"
-        except Exception:
-            conn.execute("PRAGMA journal_mode=DELETE")
-            return "delete"
+        conn.execute("PRAGMA journal_mode=DELETE")
+        return "delete"
 
 
 def _log_wal_fallback_once(db_label: str, exc: Exception) -> None:
