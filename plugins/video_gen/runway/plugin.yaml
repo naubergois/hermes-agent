@@ -1,0 +1,7 @@
+name: runway
+version: 1.0.0
+description: "Runway Gen-3 video generation backend. Supports text-to-video, image-to-video, and video editing via Runway's API."
+author: NousResearch
+kind: backend
+requires_env:
+  - RUNWAY_API_KEY

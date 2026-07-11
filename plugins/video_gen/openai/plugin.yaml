@@ -1,0 +1,7 @@
+name: openai
+version: 1.0.0
+description: "OpenAI video generation backend (DALL-E Video). Supports text-to-video and image-to-video via OpenAI's generative API."
+author: NousResearch
+kind: backend
+requires_env:
+  - OPENAI_API_KEY

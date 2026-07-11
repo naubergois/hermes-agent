@@ -1,0 +1,7 @@
+name: anthropic
+version: 1.0.0
+description: "Anthropic video generation backend (Claude Video API). Supports text-to-video and image-to-video via Anthropic's vision capabilities."
+author: NousResearch
+kind: backend
+requires_env:
+  - ANTHROPIC_API_KEY
