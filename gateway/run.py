@@ -39,7 +39,6 @@ import threading
 import time
 import sqlite3
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from pathlib import Path
 from datetime import datetime
@@ -1841,12 +1840,6 @@ class GatewayRunner:
         self.adapters: Dict[Platform, BasePlatformAdapter] = {}
         self._warn_if_docker_media_delivery_is_risky()
         _gateway_runner_ref = _weakref.ref(self)
-
-        # ⚡ PERF FIX: Thread pool for cleanup operations (no thread explosion)
-        self._cleanup_executor = ThreadPoolExecutor(
-            max_workers=4,
-            thread_name_prefix="gateway-cleanup-"
-        )
 
         # Load ephemeral config from config.yaml / env vars.
         # Both are injected at API-call time only and never persisted.
@@ -5001,10 +4994,6 @@ class GatewayRunner:
         hooks, cleans up the cached AIAgent's tool resources, evicts the
         cache entry so it can be garbage-collected, and marks the session
         so it won't be finalized again.
-        
-        ⚡ PERF FIX: Uses _collect_expired_sessions_fast() instead of O(n)
-        iteration on all sessions. Early exits when hitting non-expired
-        entries (which are newer and thus not expired).
         """
         await asyncio.sleep(60)  # initial delay — let the gateway fully start
         _finalize_failures: dict[str, int] = {}  # session_id -> consecutive failure count
@@ -5012,8 +5001,14 @@ class GatewayRunner:
         while self._running:
             try:
                 self.session_store._ensure_loaded()
-                # ⚡ PERF: Use fast expiry collection (sorts once + early exit)
-                _expired_entries = self.session_store._collect_expired_sessions_fast()
+                # Collect expired sessions first, then log a single summary.
+                _expired_entries = []
+                for key, entry in list(self.session_store._entries.items()):
+                    if entry.expiry_finalized:
+                        continue
+                    if not self.session_store._is_session_expired(entry):
+                        continue
+                    _expired_entries.append((key, entry))
 
                 if _expired_entries:
                     # Extract platform names from session keys for a compact summary.
@@ -6710,12 +6705,6 @@ class GatewayRunner:
 
         self._stop_task = asyncio.create_task(_stop_impl())
         await self._stop_task
-        
-        # ⚡ PERF FIX: Shutdown cleanup executor gracefully
-        try:
-            self._cleanup_executor.shutdown(wait=True, timeout=5.0)
-        except Exception as e:
-            logger.debug("Cleanup executor shutdown error: %s", e)
 
     async def wait_for_shutdown(self) -> None:
         """Wait for shutdown signal."""
@@ -16425,11 +16414,12 @@ class GatewayRunner:
                 key, len(_cache),
             )
             if agent is not None:
-                # ⚡ PERF FIX: Use thread pool instead of spawning new threads
-                self._cleanup_executor.submit(
-                    self._release_evicted_agent_soft,
-                    agent
-                )
+                threading.Thread(
+                    target=self._release_evicted_agent_soft,
+                    args=(agent,),
+                    daemon=True,
+                    name=f"agent-cache-evict-{key[:24]}",
+                ).start()
 
     def _sweep_idle_cached_agents(self) -> int:
         """Evict cached agents whose AIAgent has been idle > _AGENT_CACHE_IDLE_TTL_SECS.
@@ -16472,11 +16462,12 @@ class GatewayRunner:
                 "Agent cache idle-TTL evict: session=%s (idle=%.0fs)",
                 key, now - getattr(agent, "_last_activity_ts", now),
             )
-            # ⚡ PERF FIX: Use thread pool instead of spawning new threads
-            self._cleanup_executor.submit(
-                self._release_evicted_agent_soft,
-                agent
-            )
+            threading.Thread(
+                target=self._release_evicted_agent_soft,
+                args=(agent,),
+                daemon=True,
+                name=f"agent-cache-idle-{key[:24]}",
+            ).start()
         return len(to_evict)
 
     # ------------------------------------------------------------------

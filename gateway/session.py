@@ -682,11 +682,6 @@ class SessionStore:
         self._lock = threading.Lock()
         self._has_active_processes_fn = has_active_processes_fn
         
-        # ⚡ PERF FIX: Index sessions by updated_at for fast expiry scan
-        # Instead of O(n) iteration on all sessions, we can prune old ones in O(k)
-        # where k is the number of actually expired sessions (usually small)
-        self._last_expiry_scan_time: float = 0.0
-        
         # Initialize SQLite session database
         self._db = None
         try:
@@ -792,41 +787,7 @@ class SessionStore:
 
         return False
 
-    def _collect_expired_sessions_fast(self) -> List[tuple]:
-        """Collect expired sessions using early-exit on sorted updated_at.
-        
-        ⚡ PERF FIX: Instead of O(n) iteration on all sessions, sort by updated_at
-        once and break early when hitting non-expired sessions (since older sessions
-        are more likely to be expired).
-        
-        Returns list of (key, entry) tuples for expired sessions.
-        """
-        if not self._entries:
-            return []
-        
-        # Sort by updated_at (oldest first)
-        sorted_entries = sorted(
-            self._entries.items(),
-            key=lambda kv: kv[1].updated_at
-        )
-        
-        expired = []
-        now = _now()
-        
-        for key, entry in sorted_entries:
-            # Skip if already finalized
-            if getattr(entry, 'expiry_finalized', False):
-                continue
-            
-            # Early exit: if this entry isn't expired, later ones won't be either
-            # (they're newer)
-            if not self._is_session_expired(entry):
-                break
-            
-            expired.append((key, entry))
-        
-        return expired
-
+    def _should_reset(self, entry: SessionEntry, source: SessionSource) -> Optional[str]:
         """
         Check if a session should be reset based on policy.
         
